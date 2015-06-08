@@ -331,6 +331,12 @@ module Ebooks
         exit 1
       end
 
+      fire(:startup)
+    end
+
+    # Start running user event stream
+    def start
+      log "Checking user info..."
       # Save old name
       old_name = username
       # Load user object and actual username
@@ -338,11 +344,6 @@ module Ebooks
       # Warn about mismatches unless it was clearly intentional
       log "warning: bot expected to be @#{old_name} but connected to @#{username}" unless username == old_name || old_name.empty?
 
-      fire(:startup)
-    end
-
-    # Start running user event stream
-    def start
       log "starting tweet stream"
 
       stream.user do |ev|

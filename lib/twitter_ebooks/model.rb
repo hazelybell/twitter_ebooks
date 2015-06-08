@@ -160,7 +160,7 @@ module Ebooks
       @mentions = mass_tikify(mention_text)
 
       log "Ranking keywords"
-      @keywords = NLP.keywords(text).top(200).map(&:to_s)
+      @keywords = NLP.keywords(text).top(2000).map(&:to_s)
       log "Top keywords: #{@keywords[0]} #{@keywords[1]} #{@keywords[2]}"
 
       self
@@ -208,6 +208,7 @@ module Ebooks
     # @param tikis [Array<Integer>]
     # @param limit Integer how many chars we have left
     def valid_tweet?(tikis, limit)
+      return false if tikis.nil?
       tweet = NLP.reconstruct(tikis, @tokens)
       tweet.length <= limit && !NLP.unmatched_enclosers?(tweet)
     end
@@ -217,36 +218,36 @@ module Ebooks
     # @param generator [SuffixGenerator, nil]
     # @param retry_limit [Integer] how many times to retry on invalid tweet
     # @return [String]
-    def make_statement(limit=140, generator=nil, retry_limit=10)
-      responding = !generator.nil?
-      generator ||= SuffixGenerator.build(@sentences)
+    def make_statement(limit=140, generator=nil, retry_limit=100, min_length=3)
+      generator = SuffixGenerator.build(@sentences.sample(50000)) if generator.nil?
 
       retries = 0
       tweet = ""
 
-      while (tikis = generator.generate(3, :bigrams)) do
+      while (retries <= retry_limit) do
+        tikis = generator.generate(3, :bigrams)
         log "Attempting to produce tweet try #{retries+1}/#{retry_limit}"
-        next if tikis.length <= 3 && !responding
+        next if tikis.length <= min_length
         break if valid_tweet?(tikis, limit)
 
         retries += 1
-        break if retries >= retry_limit
       end
 
       if verbatim?(tikis) && tikis.length > 3 # We made a verbatim tweet by accident
         log "Attempting to produce unigram tweet try #{retries+1}/#{retry_limit}"
-        while (tikis = generator.generate(3, :unigrams)) do
+        while (retries <= retry_limit) do
+          tikis = generator.generate(3, :unigrams)
           break if valid_tweet?(tikis, limit) && !verbatim?(tikis)
 
           retries += 1
-          break if retries >= retry_limit
         end
       end
 
       tweet = NLP.reconstruct(tikis, @tokens)
 
       if retries >= retry_limit
-        log "Unable to produce valid non-verbatim tweet; using \"#{tweet}\""
+        log "Unable to produce valid non-verbatim tweet..."
+        return nil
       end
 
       fix tweet
@@ -293,15 +294,22 @@ module Ebooks
       relevant, slightly_relevant = find_relevant(sentences, input)
 
       if relevant.length >= 3
+        if (relevant.length >= 100000)
+          relevant = relevant.sample(100001)
+        end
         generator = SuffixGenerator.build(relevant)
         make_statement(limit, generator)
       elsif slightly_relevant.length >= 5
-        generator = SuffixGenerator.build(slightly_relevant)
+        if (slightly_relevant.length >= 100000)
+          slightly_relevant = slightly_relevant.sample(100002)
+        end
+        generator = SuffixGenerator.build(slightly_relevant.sample(100002))
         make_statement(limit, generator)
       elsif sentences.equal?(@mentions)
         make_response(input, limit, @sentences)
       else
-        make_statement(limit)
+        generator = SuffixGenerator.build(@sentences.sample(100000))
+        make_statement(limit, generator)
       end
     end
   end

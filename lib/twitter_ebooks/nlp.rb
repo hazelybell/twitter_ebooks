@@ -2,6 +2,7 @@
 require 'fast-stemmer'
 require 'highscore'
 require 'htmlentities'
+require 'engtagger'
 
 module Ebooks
   module NLP
@@ -36,7 +37,6 @@ module Ebooks
     # This can determine whether a word is being used as a noun/adjective/verb
     # @return [EngTagger]
     def self.tagger
-      require 'engtagger'
       @tagger ||= EngTagger.new
     end
 
@@ -111,6 +111,7 @@ module Ebooks
     # @param tokens [Array<String>]
     # @return [String]
     def self.reconstruct(tikis, tokens)
+      return nil if tikis.nil?
       text = ""
       last_token = nil
       tikis.each do |tiki|
@@ -187,6 +188,8 @@ module Ebooks
     # @param a2 [Array]
     # @return [Boolean]
     def self.subseq?(a1, a2)
+      return false if a1.length == 0
+      return false if a2.length == 0
       !a1.each_index.find do |i|
         a1[i...i+a2.length] == a2
       end.nil?

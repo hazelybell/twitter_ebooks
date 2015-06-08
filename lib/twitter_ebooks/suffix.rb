@@ -56,7 +56,8 @@ module Ebooks
       used = [index] # Sentences we've already used
       verbatim = [tikis] # Verbatim sentences to avoid reproducing
 
-      0.upto(passes-1) do
+      (0..passes).each do |passno|
+        puts "Generating... pass ##{passno}"
         varsites = {} # Map bigram start site => next tiki alternatives
 
         tikis.each_with_index do |tiki, i|
@@ -70,10 +71,14 @@ module Ebooks
         end
 
         variant = nil
+        ia = 0
         varsites.to_a.shuffle.each do |site|
+          
           start = site[0]
-
+          ib = 0
           site[1].shuffle.each do |alt|
+            puts "Variant #{ia} site #{ib}" if (ib % 10000) == 0
+            ib += 1
             verbatim << @sentences[alt[0]]
             suffix = @sentences[alt[0]][alt[1]..-1]
             potential = tikis[0..start+1] + suffix
@@ -84,8 +89,9 @@ module Ebooks
               variant = potential
               break
             end
+            return nil if ib > 100000 # got stuck. still don't know what causes this...
           end
-
+          ia += 1
           break if variant
         end
 
