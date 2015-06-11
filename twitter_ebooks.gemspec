@@ -31,4 +31,6 @@ Gem::Specification.new do |gem|
   gem.add_runtime_dependency 'highscore'
   gem.add_runtime_dependency 'pry'
   gem.add_runtime_dependency 'oauth'
+  gem.add_runtime_dependency 'lmdb'
+  gem.add_runtime_dependency 'msgpack'
 end
