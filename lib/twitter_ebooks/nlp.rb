@@ -188,8 +188,6 @@ module Ebooks
     # @param a2 [Array]
     # @return [Boolean]
     def self.subseq?(a1, a2)
-      return false if a1.length == 0
-      return false if a2.length == 0
       !a1.each_index.find do |i|
         a1[i...i+a2.length] == a2
       end.nil?

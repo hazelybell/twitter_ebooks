@@ -70,10 +70,10 @@ module Ebooks
     end
 
     def initialize
-      @tokens = [""]
+      @tokens = []
 
       # Reverse lookup tiki by token, for faster generation
-      @tikis = {"" => 0}
+      @tikis = {}
     end
 
     # Reverse lookup a token index from a token
@@ -142,7 +142,7 @@ module Ebooks
         next if l.start_with?('#') # Remove commented lines
         next if l.include?('RT') || l.include?('MT') # Remove soft retweets
 
-        if l.include?('@')
+        if l[0]==('@') || l.match(/\s@/)
           mentions << NLP.normalize(l)
         else
           statements << NLP.normalize(l)
@@ -218,24 +218,26 @@ module Ebooks
     # @param generator [SuffixGenerator, nil]
     # @param retry_limit [Integer] how many times to retry on invalid tweet
     # @return [String]
-    def make_statement(limit=140, generator=nil, retry_limit=100, min_length=3)
-      generator = SuffixGenerator.build(@sentences.sample(50000)) if generator.nil?
+    def make_statement(name, limit=140, generator=nil, retry_limit=100, min_length=3)
+      generator = SuffixGenerator.build(name, @sentences) if generator.nil?
 
       retries = 0
       tweet = ""
+      verbatim = false
 
-      while (retries <= retry_limit) do
+      while (retries <= retry_limit/2) do
         tikis = generator.generate(3, :bigrams)
         log "Attempting to produce tweet try #{retries+1}/#{retry_limit}"
         next if tikis.length <= min_length
-        break if valid_tweet?(tikis, limit)
-
+        verbatim = verbatim?(tikis)
+        break if (!verbatim) && valid_tweet?(tikis, limit)
+        puts "Verbatim: #{NLP.reconstruct(tikis, @tokens)}" if verbatim
         retries += 1
       end
 
-      if verbatim?(tikis) && tikis.length > 3 # We made a verbatim tweet by accident
-        log "Attempting to produce unigram tweet try #{retries+1}/#{retry_limit}"
+      if verbatim  # We made a verbatim tweet by accident
         while (retries <= retry_limit) do
+          log "Attempting to produce unigram tweet try #{retries+1}/#{retry_limit}"
           tikis = generator.generate(3, :unigrams)
           break if valid_tweet?(tikis, limit) && !verbatim?(tikis)
 
@@ -257,7 +259,17 @@ module Ebooks
     # @param tikis [Array<Integer>]
     # @return [Boolean]
     def verbatim?(tikis)
-      @sentences.include?(tikis) || @mentions.include?(tikis)
+      sv = @sentences.find_index { |s| s.length > 1 && SuffixGenerator.subseq?(s, tikis) }
+      unless sv.nil?
+        puts ("Corpus #{sv}: #{NLP.reconstruct(@sentences[sv], @tokens)}")
+        return true
+      end
+      sv = @mentions.find_index { |s| s.length > 1 && SuffixGenerator.subseq?(s, tikis) }
+      unless sv.nil?
+        puts ("Mention #{sv}: #{NLP.reconstruct(@mentions[sv], @tokens)}")
+        return true
+      end
+      return false
     end
 
     # Finds relevant and slightly relevant tokenized sentences to input
@@ -280,7 +292,7 @@ module Ebooks
         end
       end
 
-      [relevant, slightly_relevant]
+      [relevant, slightly_relevant, tokenized]
     end
 
     # Generates a response by looking for related sentences
@@ -289,27 +301,32 @@ module Ebooks
     # @param limit [Integer] characters available for response
     # @param sentences [Array<Array<Integer>>]
     # @return [String]
-    def make_response(input, limit=140, sentences=@mentions)
+    def make_response(name, input, limit=140, sentences=(@mentions))
       # Prefer mentions
-      relevant, slightly_relevant = find_relevant(sentences, input)
-
-      if relevant.length >= 3
-        if (relevant.length >= 100000)
-          relevant = relevant.sample(100001)
-        end
-        generator = SuffixGenerator.build(relevant)
-        make_statement(limit, generator)
-      elsif slightly_relevant.length >= 5
-        if (slightly_relevant.length >= 100000)
-          slightly_relevant = slightly_relevant.sample(100002)
-        end
-        generator = SuffixGenerator.build(slightly_relevant.sample(100002))
-        make_statement(limit, generator)
+      # Turned this off for now its causing fail?
+      relevant, slightly_relevant, tokenized = find_relevant(sentences, input)
+      tokenized = tokenized.map {|tok| tok.gsub(/\W/, '_')}
+      tokstr = tokenized.join(".")
+      puts "Making response for #{tokstr} "
+      if relevant.length >= 30
+#         if (relevant.length >= 100000)
+#           relevant = relevant.sample(100001)
+#         end
+        name = name + "/" + tokstr
+        generator = SuffixGenerator.build(name, relevant)
+        make_statement(name, limit, generator)
+      elsif slightly_relevant.length >= 50
+#         if (slightly_relevant.length >= 100000)
+#           slightly_relevant = slightly_relevant.sample(100002)
+#         end
+        name = name + "/" + tokstr
+        generator = SuffixGenerator.build(name, slightly_relevant)
+        make_statement(name, limit, generator)
       elsif sentences.equal?(@mentions)
-        make_response(input, limit, @sentences)
+        make_response(name, input, limit, @sentences)
       else
-        generator = SuffixGenerator.build(@sentences.sample(100000))
-        make_statement(limit, generator)
+        generator = SuffixGenerator.build(name, @sentences)
+        make_statement(name, limit, generator)
       end
     end
   end
