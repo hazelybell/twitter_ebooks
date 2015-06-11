@@ -13,42 +13,20 @@ module Ebooks
     
     SUBARRAY_MAGIC = 1
     PACKED_MAGIC = 3
-    CHUNKING_SIZE = 10
     
-    def initialize(lmdbdb, prefix=[], parent=nil)
+    def initialize(lmdbdb, prefix=[])
       @lmdbdb = lmdbdb
       @prefix = prefix
+      @mykey = MessagePack.pack(@prefix)
       @size = nil
-      @parent = parent
-      unless parent.nil? then
-        @myindex = prefix[-1]
-        @mykey = ""
-      else
-        @myindex = nil
-        @mykey = MessagePack.pack(@prefix)
-      end
-      
-#       puts "#{prefix}"
       
       asize = 0
-      if @parent.nil? then
-        v = @lmdbdb.get(@mykey)
-        if v == nil then
-          asize = 0
-        else
-          (magic1, asize) = MessagePack.unpack(v)
-          asize = 0 if asize == nil
-          raise "Bad magic!" if (magic1 != SUBARRAY_MAGIC)
-        end
+      v = @lmdbdb.get(@mykey)
+      if v == nil then
+        asize = 0
       else
-        v = @parent.getraw(@myindex)
-        if v == nil then
-          asize = 0
-        else
-          (magic1, asize) = v
-          asize = 0 if asize == nil
-          raise "Bad magic!" if (magic1 != SUBARRAY_MAGIC)
-        end
+        (magic1, asize) = MessagePack.unpack(v)
+        raise "Bad magic!" if (magic1 != SUBARRAY_MAGIC)
       end
       @size = asize
       
@@ -59,29 +37,17 @@ module Ebooks
       return @size
     end
     
-    def getraw(key)
-      chunk = key/CHUNKING_SIZE
-      offset = key%CHUNKING_SIZE
-      binkey = MessagePack.pack(@prefix + [chunk])
+    def get(key)
+      binkey = MessagePack.pack(@prefix + [key])
       v = @lmdbdb.get(binkey)
       return nil if v.nil?
-#       puts "#{key} #{chunk} #{offset}"
-      chunkv = MessagePack.unpack(v)
-#       puts "#{chunkv}"
-#       raise "Wat!" if chunkv[offset].size != 2
-      return chunkv[offset]
-    end
-    
-    def get(key)
-      v = getraw(key)
-      return nil if v.nil?
-      (magic1, rest) = v
+      (magic1, rest) = MessagePack.unpack(v)
       if (magic1 == SUBARRAY_MAGIC)
-        return LMDBBackedArray.new(@lmdbdb, @prefix + [key], self)
+        return LMDBBackedArray.new(@lmdbdb, @prefix + [key])
       elsif (magic1 == PACKED_MAGIC)
         return rest
       else
-        raise "Bad magic: #{magic1} while getting #{@prefix} #{key}"
+        raise "Bad magic!"
       end
     end
     
@@ -90,73 +56,39 @@ module Ebooks
     end
     
     def setsize(newsize)
-      if @parent.nil?
-        if newsize > 0 then
-          @lmdbdb.put(@mykey, MessagePack.pack([SUBARRAY_MAGIC, newsize]))
-        else
-          begin
-            @lmdbdb.delete(@mykey)
-          rescue LMDB::Error::NOTFOUND
-          end
-        end
+      if newsize > 0 then
+        @lmdbdb.put(@mykey, MessagePack.pack([SUBARRAY_MAGIC, newsize]))
       else
-        if newsize > 0 then
-          @parent.putraw(@myindex, [SUBARRAY_MAGIC, newsize])
-        else
-          @parent.delete(@myindex)
+        begin
+          @lmdbdb.delete(@mykey)
+        rescue LMDB::Error::NOTFOUND
         end
       end
       @size = newsize
     end
     
     def delete(key)
-      chunk = key/CHUNKING_SIZE
-      offset = key%CHUNKING_SIZE
-      binkey = MessagePack.pack(@prefix + [chunk])
-      v = @lmdbdb.get(binkey)
-      return nil if v.nil?
-      chunkv = MessagePack.unpack(v)
-      chunkv[offset] = nil
-      if chunkv.all? {|x| x.nil?} then
-        @lmdbdb.delete(binkey)
-      else
-        @lmdbdb.put(binkey, MessagePack.pack(chunkv))
-      end
+      binkey = MessagePack.pack(@prefix + [key])
+      @lmdbdb.delete(binkey)
       if (key == size()-1) then
         setsize(key)
       end
     end
     
-    def putraw(key, value)
-      chunk = key/CHUNKING_SIZE
-      offset = key%CHUNKING_SIZE
-      binkey = MessagePack.pack(@prefix + [chunk])
+    def put(key, value)
+      binkey = MessagePack.pack(@prefix + [key])
       if key > size-1
         setsize(key+1)
       end
-      chunkv = @lmdbdb.get(binkey)
-      if chunkv.nil?
-        chunkv = [] 
-      else
-        chunkv = MessagePack.unpack(chunkv)
-      end
-#       puts "before: #{chunkv}"
-      chunkv[offset] = value
-#       puts "after: #{chunkv}"
-      @lmdbdb.put(binkey, MessagePack.pack(chunkv))
-      value
-    end
-    
-    def put(key, value)
       if value == []
-        v = [SUBARRAY_MAGIC, 0]
-        putraw(key, v)
-        value = LMDBBackedArray.new(@lmdbdb, @prefix + [key], self)
+        @lmdbdb.put(binkey, MessagePack.pack([SUBARRAY_MAGIC, 0]))
+        value = LMDBBackedArray.new(@lmdbdb, @prefix + [key])
       elsif value == nil
         delete(key)
       else
-        v = [PACKED_MAGIC, value]
-        putraw(key, v)
+#         puts "#{value}"
+        @lmdbdb.put(binkey, MessagePack.pack([PACKED_MAGIC, value]))
+#         @lmdbdb.put(binkey, QARRAY_MAGIC.chr + value.pack('Q*'))
       end
       value
     end
@@ -177,13 +109,14 @@ module Ebooks
     end
     
     def each
-      for i in 0..(@size-1) do
+      for i in 0..(size-1) do
         yield(get(i))
       end
     end
     
     def append(o) 
-      put(@size, o)
+      self[size] = o
+      setsize(size+1)
     end
     
     def <<(o)
@@ -202,7 +135,7 @@ module Ebooks
     def initialize(name, sentences)
       dbdir = File.join("model", name)
       FileUtils.mkdir_p(dbdir)
-      @env = LMDB.new dbdir, :writemap => true
+      @env = LMDB.new dbdir, :writemap => true, :mapasync => true, :nosync => true, :nometasync => true
       @sentences = LMDBBackedArray.new(@env.database("sentences", {:create => true}))
       @unigrams = LMDBBackedArray.new(@env.database("unigrams", {:create => true}))
       @bigrams = LMDBBackedArray.new(@env.database("bigrams", {:create => true}))
