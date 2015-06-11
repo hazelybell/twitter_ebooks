@@ -70,10 +70,10 @@ module Ebooks
     end
 
     def initialize
-      @tokens = []
+      @tokens = [""]
 
       # Reverse lookup tiki by token, for faster generation
-      @tikis = {}
+      @tikis = {"" => 0}
     end
 
     # Reverse lookup a token index from a token
