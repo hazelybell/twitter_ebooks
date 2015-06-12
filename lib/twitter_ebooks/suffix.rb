@@ -17,19 +17,24 @@ module Ebooks
     end
     
     def already(sentence)
-      return false # TODO: fix this (reverse token map?)
-      bigrs = @bigrams[sentence[0]]
-      return false if bigrs.nil?
-      bigrs = bigrs[sentence[1]]
-      return false if bigrs.nil?
-#       unless tokens.nil?  then
-#         puts "#{tokens[sentence[0]]} #{tokens[sentence[1]]}: #{bigrs.length}"
-#         puts "#{bigrs.to_a}"
-#       end
-      @bigrams[sentence[0]][sentence[1]].each do |ref|
-        if ref[1] = 2 # 2 is the first bigram
+#       return false # TODO: fix this (reverse token map?)
+      min = 10000000000000
+      minbigrs = nil
+      minpos = nil
+      for bi in 2..(sentence.length)
+        bigrs = @bigrams[sentence[bi-2]]
+        return false if bigrs.nil?
+        bigrs = bigrs[sentence[bi-1]]
+        return false if bigrs.nil?
+        if bigrs.length < min
+          min = bigrs.length
+          minbigrs = bigrs
+          minpos = bi
+        end
+      end
+      minbigrs.each do |ref|
+        if ref[1] = minpos # 2 is the first bigram
           if @sentences[ref[0]] == sentence
-#             puts "already: #{ref[0]} is #{@sentences[ref[0]]}"
             return true
           end
         end
@@ -64,16 +69,19 @@ module Ebooks
 
               last_tiki = tiki
             end
+          else
+            return false
           end
         end
       rescue LMDB::Error::MAP_FULL
         @sentences.expand()
         retry
       end
+      return true
     end
 
     def build(sentences)
-      i = 0
+      i = @sentences.size
       while (i < sentences.size) 
         log ("Building: sentence #{i}") if (i % 1000) == 0
         tikis = sentences[i]

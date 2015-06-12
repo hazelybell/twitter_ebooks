@@ -122,7 +122,9 @@ module Ebooks
                   || t.length > 30
             end
             tokstr = tokens.map { |t| tikify(t) }
-            destination.add(tokstr)
+            unless destination.add(tokstr)
+              puts "Duplicate: #{NLP.reconstruct(tokstr, @tokens)}"
+            end
 #           end
         rescue LMDB::Error::MAP_FULL
           destination.expand()
