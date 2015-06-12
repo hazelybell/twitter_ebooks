@@ -43,34 +43,44 @@ module Ebooks
     # Load a saved model
     # @param path [String]
     # @return [Ebooks::Model]
-    def self.load(path)
+    def self.load(path, create=false)
       model = Model.new
       model.instance_eval do
-        props = Marshal.load(File.open(path, 'rb') { |f| f.read })
-        @tokens = props[:tokens]
-        @sentences = props[:sentences]
-        @mentions = props[:mentions]
-        @keywords = props[:keywords]
+        FileUtils.mkdir_p(path) unless (!create) || File.directory?(path)
+        @env = LMDB.new path, :nometasync => true, :mapasync => true, :nosync => true
+        puts "Loading the corpus at #{path}"
+        @tokens = LMDBBackedArray.new(@env.database("tokens", {:create => create}))
+        @sentences = LMDBBackedArray.new(@env.database("sentences", {:create => create}))
+        @sentences = LMDBBackedArray.new(@env.database("sentences", {:create => create}))
+        @unigrams = LMDBBackedArray.new(@env.database("unigrams", {:create => create}))
+        @bigrams = LMDBBackedArray.new(@env.database("bigrams", {:create => create}))
+        @smodel = SuffixGenerator.new(nil, [@sentences, @unigrams, @bigrams])
+        @mentions = LMDBBackedArray.new(@env.database("mentions", {:create => create}))
+        @mention_unigrams = LMDBBackedArray.new(@env.database("mention_unigrams", {:create => create}))
+        @mention_bigrams = LMDBBackedArray.new(@env.database("mention_bigrams", {:create => create}))
+        @mmodel = SuffixGenerator.new(nil, [@mentions, @mention_unigrams, @mention_bigrams])
+        @keywords = LMDBBackedArray.new(@env.database("keywords", {:create => create}))
+        if @tokens[INTERIM].nil?
+          @tokens[INTERIM] = INTERIMT
+        end
+        raise "Not INTERIM: #{@tokens[INTERIM]}" unless @tokens[INTERIM] == INTERIMT
+        # TODO: persist this properly and not in RAM
+        @tokens.each_with_index do |value, index|
+          @tikis[value] = index
+        end
       end
       model
     end
 
     # Save model to a file
     # @param path [String]
-    def save(path)
-      File.open(path, 'wb') do |f|
-        f.write(Marshal.dump({
-          tokens: @tokens,
-          sentences: @sentences,
-          mentions: @mentions,
-          keywords: @keywords
-        }))
-      end
+    def save()
+      @env.sync(true)
       self
     end
 
     def initialize
-      @tokens = []
+#       @tokens = []
 
       # Reverse lookup tiki by token, for faster generation
       @tikis = {}
@@ -84,25 +94,43 @@ module Ebooks
         return @tikis[token]
       else
         (@tokens.length+1)%1000 == 0 and puts "#{@tokens.length+1} tokens"
-        @tokens << token 
-        return @tikis[token] = @tokens.length-1
+        begin
+          @tokens << token 
+        rescue LMDB::Error::MAP_FULL
+          @tokens.expand()
+          retry
+        end
+        @tikis[token] = @tokens.length-1
       end
     end
 
     # Convert a body of text into arrays of tikis
     # @param text [String]
+    # @param destination [Array<Array<Integer>>]
     # @return [Array<Array<Integer>>]
-    def mass_tikify(text)
+    def mass_tikify(text, destination)
       sentences = NLP.sentences(text)
-
-      sentences.map do |s|
-        tokens = NLP.tokenize(s).reject do |t|
-          # Don't include usernames/urls as tokens
-          t.include?('@') || t.include?('http')
+      i = 0
+      sentences.each do |s|
+        log ("Importing: sentence #{i}") if (i % 1000) == 0
+        begin
+#           @env.transaction do |trans|
+            tokens = NLP.tokenize(s).reject do |t|
+              # Don't include usernames/urls as tokens
+              (t[0]==('@')) \
+                  || (t.include?('://')) \
+                  || t.length > 30
+            end
+            tokstr = tokens.map { |t| tikify(t) }
+            destination.add(tokstr)
+#           end
+        rescue LMDB::Error::MAP_FULL
+          destination.expand()
+          retry
         end
-
-        tokens.map { |t| tikify(t) }
+        i += 1
       end
+      destination
     end
 
     # Consume a corpus into this model
@@ -156,11 +184,10 @@ module Ebooks
 
       log "Tokenizing #{text.count('\n')} statements and #{mention_text.count('\n')} mentions"
 
-      @sentences = mass_tikify(text)
-      @mentions = mass_tikify(mention_text)
+      mass_tikify(text, @smodel)
+      mass_tikify(mention_text, @mmodel)
 
-      log "Ranking keywords"
-      @keywords = NLP.keywords(text).top(2000).map(&:to_s)
+      @keywords.import(NLP.keywords(text).top(2000).map(&:to_s))
       log "Top keywords: #{@keywords[0]} #{@keywords[1]} #{@keywords[2]}"
 
       self
@@ -219,7 +246,7 @@ module Ebooks
     # @param retry_limit [Integer] how many times to retry on invalid tweet
     # @return [String]
     def make_statement(name, limit=140, generator=nil, retry_limit=100, min_length=3)
-      generator = SuffixGenerator.build(name, @sentences) if generator.nil?
+      generator = @smodel if generator.nil?
 
       retries = 0
       tweet = ""
@@ -325,8 +352,7 @@ module Ebooks
       elsif sentences.equal?(@mentions)
         make_response(name, input, limit, @sentences)
       else
-        generator = SuffixGenerator.build(name, @sentences)
-        make_statement(name, limit, generator)
+        make_statement(name, limit)
       end
     end
   end

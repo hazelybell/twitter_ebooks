@@ -11,7 +11,8 @@ module Ebooks
   SKELETON_PATH = File.join(GEM_PATH, 'skeleton')
   TEST_PATH = File.join(GEM_PATH, 'test')
   TEST_CORPUS_PATH = File.join(TEST_PATH, 'corpus/0xabad1dea.tweets')
-  INTERIM = :interim
+  INTERIM = 0
+  INTERIMT = "__twitter_ebooks_fake_interim_token"
 end
 
 require 'twitter_ebooks/nlp'

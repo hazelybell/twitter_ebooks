@@ -78,7 +78,7 @@ STR
     Usage: ebooks consume <corpus_path> [corpus_path2] [...]
 
     Processes some number of text files or json tweet corpuses
-    into usable models. These will be output at model/<corpus_name>.model
+    into usable models. These will be output at model/<corpus_name>.corpus
   STR
 
   def self.consume(pathes)
@@ -91,8 +91,8 @@ STR
       filename = File.basename(path)
       shortname = filename.split('.')[0..-2].join('.')
 
-      outpath = File.join(APP_PATH, 'model', "#{shortname}.model")
-      Ebooks::Model.consume(path).save(outpath)
+      outpath = File.join(APP_PATH, 'model', "#{shortname}.corpus")
+      Ebooks::Model.load(outpath, true).consume(path).save()
       log "Corpus consumed to #{outpath}"
     end
   end
@@ -101,7 +101,7 @@ STR
     Usage: ebooks consume-all <model_name> <corpus_path> [corpus_path2] [...]
 
     Processes some number of text files or json tweet corpuses
-    into one usable model. It will be output at model/<model_name>.model
+    into one usable model. It will be output at model/<model_name>.corpus
   STR
 
   def self.consume_all(name, paths)
@@ -110,7 +110,7 @@ STR
       exit 1
     end
 
-    outpath = File.join(APP_PATH, 'model', "#{name}.model")
+    outpath = File.join(APP_PATH, 'model', "#{name}.corpus")
     Ebooks::Model.consume_all(paths).save(outpath)
     log "Corpuses consumed to #{outpath}"
   end
@@ -383,6 +383,13 @@ STR
       help
       exit 1
     end
+  end
+end
+
+Signal.trap("USR1") do
+  Thread.list.each do |thread|
+    log "Thread TID-#{thread.object_id.to_s(36)}"
+    log thread.backtrace.join("\n")
   end
 end
 

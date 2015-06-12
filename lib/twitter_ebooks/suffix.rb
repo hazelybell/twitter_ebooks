@@ -13,78 +13,90 @@ module Ebooks
     # @param sentences [Array<Array<Integer>>]
     # @return [SuffixGenerator]
     def self.build(name, sentences)
-      SuffixGenerator.new(name, sentences)
+      SuffixGenerator.new(name, nil).build(sentences)
     end
-
-    def initialize(name, sentences)
-      dbdir = File.join("model", name)
-      puts "Using DB: #{dbdir}"
-      FileUtils.mkdir_p(dbdir)
-      @env = LMDB.new dbdir, :nometasync => true, :mapasync => true, :nosync => true
-      @sentences = LMDBBackedArray.new(@env.database("sentences", {:create => true}))
-      @unigrams = LMDBBackedArray.new(@env.database("unigrams", {:create => true}))
-      @bigrams = LMDBBackedArray.new(@env.database("bigrams", {:create => true}))
-      sentences = sentences.reject{ |s| s.length < 2 }
-      if @sentences.size > sentences.size then
-        raise "Sentences shrunk!"
-#         @sentences.clear
-#         @unigrams.clear
-#         @bigrams.clear
-      end
-      if @sentences.size < sentences.size then
-        ii = 0
-        i = 0
-        while (ii < sentences.size)
-          begin
-            @sentences.cachereset
-            @unigrams.cachereset
-            @bigrams.cachereset
-            @env.transaction do |trans|
-              i = ii
-              s = ii+1000
-              log ("Building: sentence #{i} of #{sentences.length}")
-              while (i < s && i < sentences.size) 
-                tikis = sentences[i]
-                if @sentences[i].nil? then
-                  @sentences[i] = tikis
-                  last_tiki = INTERIM
-                  tikis.each_with_index do |tiki, j|
-                    @unigrams[last_tiki] ||= []
-                    @unigrams[last_tiki] << [i, j]
-
-                    @bigrams[last_tiki] ||= []
-                    @bigrams[last_tiki][tiki] ||= []
-
-                    if j == tikis.length-1 # Mark sentence endings
-                      @unigrams[tiki] ||= []
-                      @unigrams[tiki] << [i, INTERIM]
-                      @bigrams[last_tiki][tiki] << [i, INTERIM]
-                    else
-                      @bigrams[last_tiki][tiki] << [i, j+1]
-                    end
-
-                    last_tiki = tiki
-                  end
-                else
-                  unless @sentences[i] == tikis then
-                    raise "Data bad/corrput?"
-                  end
-                end
-                i += 1
-              end
-            end
-          rescue LMDB::Error::MAP_FULL
-            previousMapsize = @env.info[:mapsize]
-            newMapsize = previousMapsize * 1.4
-            realnewMapsize = (newMapsize/(1024*1024)).ceil * 1024 * 1024
-            puts "Previous map size: #{previousMapsize} new #{newMapsize} rounded #{realnewMapsize}"
-            @env.mapsize=(realnewMapsize)
-            retry
+    
+    def already(sentence)
+      return false # TODO: fix this (reverse token map?)
+      bigrs = @bigrams[sentence[0]]
+      return false if bigrs.nil?
+      bigrs = bigrs[sentence[1]]
+      return false if bigrs.nil?
+#       unless tokens.nil?  then
+#         puts "#{tokens[sentence[0]]} #{tokens[sentence[1]]}: #{bigrs.length}"
+#         puts "#{bigrs.to_a}"
+#       end
+      @bigrams[sentence[0]][sentence[1]].each do |ref|
+        if ref[1] = 2 # 2 is the first bigram
+          if @sentences[ref[0]] == sentence
+#             puts "already: #{ref[0]} is #{@sentences[ref[0]]}"
+            return true
           end
-          ii=i
         end
       end
+      return false
+    end
+    
+    def add(sentence)
+      return nil if sentence.length < 2
+      tikis=sentence
+      begin
+        @env.transaction do |trans|
+          unless already(tikis) then
+            i = @sentences.size
+            log ("Adding: sentence #{i}") if (i % 1000) == 0
+            @sentences[i] = tikis
+            last_tiki = INTERIM
+            tikis.each_with_index do |tiki, j|
+              @unigrams[last_tiki] ||= []
+              @unigrams[last_tiki] << [i, j]
 
+              @bigrams[last_tiki] ||= []
+              @bigrams[last_tiki][tiki] ||= []
+
+              if j == tikis.length-1 # Mark sentence endings with -1
+                @unigrams[tiki] ||= []
+                @unigrams[tiki] << [i, -1]
+                @bigrams[last_tiki][tiki] << [i, -1]
+              else
+                @bigrams[last_tiki][tiki] << [i, j+1]
+              end
+
+              last_tiki = tiki
+            end
+          end
+        end
+      rescue LMDB::Error::MAP_FULL
+        @sentences.expand()
+        retry
+      end
+    end
+
+    def build(sentences)
+      i = 0
+      while (i < sentences.size) 
+        log ("Building: sentence #{i}") if (i % 1000) == 0
+        tikis = sentences[i]
+        add(tikis)
+        i += 1
+      end
+    end
+
+    def initialize(name, prex)
+      if prex.nil? then
+        dbdir = File.join("model", name)
+        puts "Using DB: #{dbdir}"
+        FileUtils.mkdir_p(dbdir) unless File.directory?(dbdir)
+        @env = LMDB.new dbdir, :nometasync => true, :mapasync => true, :nosync => true
+        @sentences = LMDBBackedArray.new(@env.database("sentences", {:create => true}))
+        @unigrams = LMDBBackedArray.new(@env.database("unigrams", {:create => true}))
+        @bigrams = LMDBBackedArray.new(@env.database("bigrams", {:create => true}))
+      else
+        @sentences = prex[0]
+        @unigrams = prex[1]
+        @bigrams = prex[2]
+        @env = @sentences.env
+      end
       self
     end
     
@@ -122,7 +134,7 @@ module Ebooks
 
           alternatives = unigramsOn ? @unigrams[next_tiki] : @bigrams[tiki][next_tiki]
           # Filter out suffixes from previous sentences
-          alternatives = alternatives.reject { |a| a[1] == INTERIM || used.include?(a[0]) }
+          alternatives = alternatives.reject { |a| a[1] == -1 || used.include?(a[0]) }
           alternatives = alternatives.sample(10000)
           varsites[i] = alternatives unless alternatives.empty?
         end

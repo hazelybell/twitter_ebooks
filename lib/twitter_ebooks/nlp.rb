@@ -87,7 +87,12 @@ module Ebooks
     # @return [Highscore::Keywords]
     def self.keywords(text)
       # Preprocess to remove stopwords (highscore's blacklist is v. slow)
-      text = NLP.tokenize(text).reject { |t| stopword?(t) }.join(' ')
+      text = NLP.tokenize(text).reject { |t| stopword?(t) }
+      
+      if text.length > 1000000 then
+        text=text.sample(1000000)
+      end
+      text = text.join(' ')
 
       text = Highscore::Content.new(text)
 
@@ -102,7 +107,7 @@ module Ebooks
         set :word_pattern, /(?<!@)(?<=\s)[\w']+/           # => default: /\w+/
         #set :stemming, true                # => default: false
       end
-
+      puts "Ranking keywords from #{text.content.length} words!"
       text.keywords
     end
 

@@ -13,8 +13,8 @@ module Ebooks
       @lmdbdb = lmdbdb
       @prefix = prefix
       @mykey = MessagePack.pack(@prefix)
-      @size = nil
-      @cache = {}
+#       @size = nil
+#       @cache = {}
       
       asize = 0
       v = @lmdbdb.get(@mykey)
@@ -24,17 +24,29 @@ module Ebooks
         (magic1, asize) = MessagePack.unpack(v)
         raise "Bad magic!" if (magic1 != SUBARRAY_MAGIC)
       end
-      @size = asize
+#       @size = asize
       
       self
     end
     
+    def env
+      @lmdbdb.env
+    end
+    
     def size
-      return @size
+      asize = 0
+      v = @lmdbdb.get(@mykey)
+      if v == nil then
+        asize = 0
+      else
+        (magic1, asize) = MessagePack.unpack(v)
+        raise "Bad magic!" if (magic1 != SUBARRAY_MAGIC)
+      end
+      return asize
     end
     
     def length
-      return @size
+      return size
     end
     
     def getv(v, key)
@@ -42,7 +54,7 @@ module Ebooks
       (magic1, rest) = MessagePack.unpack(v)
       if (magic1 == SUBARRAY_MAGIC)
         v = LMDBBackedArray.new(@lmdbdb, @prefix + [key])
-        @cache[key] = v
+#         @cache[key] = v
         return v
       elsif (magic1 == PACKED_MAGIC)
 #         @cache[key] = rest
@@ -53,7 +65,7 @@ module Ebooks
     end
     
     def get(key)
-      return @cache[key] unless @cache[key].nil?
+#       return @cache[key] unless @cache[key].nil?
       binkey = MessagePack.pack(@prefix + [key])
       return getv(@lmdbdb.get(binkey), key)
     end
@@ -71,7 +83,7 @@ module Ebooks
         rescue LMDB::Error::NOTFOUND
         end
       end
-      @size = newsize
+#       @size = newsize
     end
     
     def delete(key)
@@ -80,21 +92,21 @@ module Ebooks
       if (key == size()-1) then
         setsize(key)
       end
-      @cache[key] = nil
+#       @cache[key] = nil
     end
     
     def put(key, value)
       binkey = MessagePack.pack(@prefix + [key])
-      if key > size-1
+      if key >= size
         setsize(key+1)
       end
       if value == []
         @lmdbdb.put(binkey, MessagePack.pack([SUBARRAY_MAGIC, 0]))
         value = LMDBBackedArray.new(@lmdbdb, @prefix + [key])
-        @cache[key] = value
+#         @cache[key] = value
       elsif value == nil
         delete(key)
-        @cache.delete(key)
+#         @cache.delete(key)
       else
 #         puts "#{value}"
         @lmdbdb.put(binkey, MessagePack.pack([PACKED_MAGIC, value]))
@@ -118,10 +130,19 @@ module Ebooks
       end
     end
     
-    def each
+    def each_with_index
       startkey = MessagePack.pack(@prefix + [0])
       @lmdbdb.cursor do |cursor|
-        (k, v) = cursor.set(startkey)
+        k, v = nil, nil
+        begin
+          (k, v) = cursor.set(startkey)
+        rescue LMDB::Error::NOTFOUND
+          begin
+            (k, v) = cursor.set_range(startkey)
+          rescue LMDB::Error::NOTFOUND
+            return
+          end
+        end
         stop = false
         lastindex = 0
         until stop do
@@ -136,24 +157,35 @@ module Ebooks
           end
           raise "cursor decreasing :(" if index < lastindex
           value = getv(v, index)
-          yield(value) unless value.nil?
+          yield(value, index) unless value.nil?
           lastindex = index
           (k, v) = cursor.next
         end
 #         puts "each: #{lastindex} #{@size}"
-        if lastindex < (@size-1) then
+        if lastindex < (size-1) then
           for i in (lastindex+1)..(size-1) do
             item = get(i)
             raise "cursor didn't get them all!" unless item.nil?
-            yield(item) unless item.nil?
+            yield(item, i) unless item.nil?
           end
         end
       end
     end
     
+    def each
+      each_with_index do |value, index|
+        yield(value)
+      end
+    end
+    
+    def each_index
+      each_with_index do |value, index|
+        yield(index)
+      end
+    end
+    
     def append(o) 
-      self[size] = o
-      setsize(size+1)
+      put(size, o)
     end
     
     def <<(o)
@@ -161,7 +193,29 @@ module Ebooks
     end
     
     def cachereset
-      @cache = {}
+#       @cache = {}
+    end
+    
+    def expand()
+      previousMapsize = env.info[:mapsize]
+      newMapsize = previousMapsize * 1.4
+      realnewMapsize = (newMapsize/(1024*1024)).ceil * 1024 * 1024
+      puts "Previous map size: #{previousMapsize} new #{newMapsize} rounded #{realnewMapsize}"
+      env.mapsize=(realnewMapsize)
+    end
+    
+    def import(a)
+      i = 0
+      @lmdbdb.clear
+      while (i < a.size)
+        begin
+          put(i, a[i])
+        rescue LMDB::Error::MAP_FULL
+          expand
+          retry
+        end
+        i+=1
+      end
     end
   end
 end
