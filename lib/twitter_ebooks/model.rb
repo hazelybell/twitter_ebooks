@@ -109,7 +109,7 @@ module Ebooks
     # @param destination [Array<Array<Integer>>]
     # @return [Array<Array<Integer>>]
     def mass_tikify(text, destination)
-      sentences = NLP.sentences(text)
+#       sentences = NLP.sentences(text)
       i = 0
       sentences.each do |s|
         log ("Importing: sentence #{i}") if (i % 1000) == 0
@@ -122,9 +122,7 @@ module Ebooks
                   || t.length > 30
             end
             tokstr = tokens.map { |t| tikify(t) }
-            unless destination.add(tokstr)
-              puts "Duplicate: #{NLP.reconstruct(tokstr, @tokens)}"
-            end
+            destination.add(tokstr)
 #           end
         rescue LMDB::Error::MAP_FULL
           destination.expand()
