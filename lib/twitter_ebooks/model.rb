@@ -67,6 +67,9 @@ module Ebooks
         # TODO: persist this properly and not in RAM
         @tokens.each_with_index do |value, index|
           @tikis[value] = index
+          dcd = value.downcase
+          @tikis_downcase[dcd] ||= []
+          @tikis_downcase[dcd] << index
         end
       end
       model
@@ -106,13 +109,13 @@ module Ebooks
       end
       self
     end
-     
 
     def initialize
 #       @tokens = []
 
       # Reverse lookup tiki by token, for faster generation
       @tikis = {}
+      @tikis_downcase = {}
     end
 
     # Reverse lookup a token index from a token
@@ -328,6 +331,32 @@ module Ebooks
       slightly_relevant = []
 
       tokenized = NLP.tokenize(input).map(&:downcase)
+      
+      if sentences.equal?(@sentences)
+        sentences = []
+        tokenized.each do |token|
+          next if @tikis_downcase[token].nil?
+          @tikis_downcase[token].each do |tiki|
+            next if tiki.nil?
+            next if @unigrams[tiki].nil?
+            @unigrams[tiki].each do |ref|
+              sentences << @sentences[ref[0]]
+            end
+          end
+        end
+      elsif sentences.equal?(@mentions)
+        sentences = []
+        tokenized.each do |token|
+          next if @tikis_downcase[token].nil?
+          @tikis_downcase[token].each do |tiki|
+            next if tiki.nil?
+            next if @mention_unigrams[tiki].nil?
+            @mention_unigrams[tiki].each do |ref|
+              sentences << @mentions[ref[0]]
+            end
+          end
+        end
+      end
 
       sentences.each do |sent|
         tokenized.each do |token|
