@@ -130,8 +130,8 @@ STR
       exit 1
     end
 
-    Ebooks::Model.consume(path).append(File.join(APP_PATH,'model',"#{name}.model"))
-    log "Corpus appended to #{name}.model"
+    Ebooks::Model.load(File.join(APP_PATH,'corpus',"#{name}.corpus").consume(path)
+    log "Corpus appended to #{name}.corpus"
   end
  
 
