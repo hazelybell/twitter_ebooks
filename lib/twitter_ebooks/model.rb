@@ -60,17 +60,14 @@ module Ebooks
         @mention_bigrams = LMDBBackedArray.new(@env.database("mention_bigrams", {:create => create}))
         @mmodel = SuffixGenerator.new(nil, [@mentions, @mention_unigrams, @mention_bigrams])
         @keywords = LMDBBackedArray.new(@env.database("keywords", {:create => create}))
+        @tikis = LMDBBackedHash.new(@env.database("tikis", {:create => create}))
+        @tikis_downcase = LMDBBackedHash.new(@env.database("tikis_downcase", {:create => create}))
         if @tokens[INTERIM].nil?
           @tokens[INTERIM] = INTERIMT
+          @tikis[INTERIMT] = INTERIM
+          @tikis_downcase[INTERIMT] = INTERIM
         end
         raise "Not INTERIM: #{@tokens[INTERIM]}" unless @tokens[INTERIM] == INTERIMT
-        # TODO: persist this properly and not in RAM
-        @tokens.each_with_index do |value, index|
-          @tikis[value] = index
-          dcd = value.downcase
-          @tikis_downcase[dcd] ||= []
-          @tikis_downcase[dcd] << index
-        end
       end
       model
     end
@@ -83,11 +80,6 @@ module Ebooks
     end
 
     def initialize
-#       @tokens = []
-
-      # Reverse lookup tiki by token, for faster generation
-      @tikis = {}
-      @tikis_downcase = {}
     end
 
     # Reverse lookup a token index from a token
@@ -104,7 +96,15 @@ module Ebooks
           @tokens.expand()
           retry
         end
-        @tikis[token] = @tokens.length-1
+        index = @tokens.length-1
+        @tikis[token] = index
+        dcd = token.downcase
+        if @tikis_downcase[dcd].nil? then
+          @tikis_downcase[dcd] = [index]
+        else
+          @tikis_downcase[dcd] = @tikis_downcase[dcd].to_a + [index]
+        end
+        return index
       end
     end
 

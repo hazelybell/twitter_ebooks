@@ -1,30 +1,15 @@
 module Ebooks
-  # This generator uses data identical to a markov model, but
-  # instead of making a chain by looking up bigrams it uses the
-  # positions to randomly replace suffixes in one sentence with
-  # matching suffixes in another
-  class LMDBBackedArray
+  SUBARRAY_MAGIC = 1
+  SUBHASH_MAGIC = 2
+  PACKED_MAGIC = 3
+  
+  class LMDBBackedHash
     include Enumerable
-    
-    SUBARRAY_MAGIC = 1
-    PACKED_MAGIC = 3
     
     def initialize(lmdbdb, prefix=[])
       @lmdbdb = lmdbdb
       @prefix = prefix
       @mykey = MessagePack.pack(@prefix)
-#       @size = nil
-#       @cache = {}
-      
-      asize = 0
-      v = @lmdbdb.get(@mykey)
-      if v == nil then
-        asize = 0
-      else
-        (magic1, asize) = MessagePack.unpack(v)
-        raise "Bad magic!" if (magic1 != SUBARRAY_MAGIC)
-      end
-#       @size = asize
       
       self
     end
@@ -40,7 +25,7 @@ module Ebooks
         asize = 0
       else
         (magic1, asize) = MessagePack.unpack(v)
-        raise "Bad magic!" if (magic1 != SUBARRAY_MAGIC)
+        raise "Bad magic!" if (magic1 != SUBHASH_MAGIC)
       end
       return asize
     end
@@ -54,10 +39,11 @@ module Ebooks
       (magic1, rest) = MessagePack.unpack(v)
       if (magic1 == SUBARRAY_MAGIC)
         v = LMDBBackedArray.new(@lmdbdb, @prefix + [key])
-#         @cache[key] = v
+        return v
+      elsif (magic1 == SUBHASH_MAGIC)
+        v = LMDBBackedHash.new(@lmdbdb, @prefix + [key])
         return v
       elsif (magic1 == PACKED_MAGIC)
-#         @cache[key] = rest
         return rest
       else
         raise "Bad magic!"
@@ -65,9 +51,13 @@ module Ebooks
     end
     
     def get(key)
-#       return @cache[key] unless @cache[key].nil?
       binkey = MessagePack.pack(@prefix + [key])
       return getv(@lmdbdb.get(binkey), key)
+    end
+    
+    def has_key?(key)
+      binkey = MessagePack.pack(@prefix + [key])
+      return true if @lmdbdb.get(binkey)
     end
     
     def [](key)
@@ -76,6 +66,141 @@ module Ebooks
     
     def setsize(newsize)
       if newsize > 0 then
+        @lmdbdb.put(@mykey, MessagePack.pack([SUBHASH_MAGIC, newsize]))
+      else
+        begin
+          @lmdbdb.delete(@mykey)
+        rescue LMDB::Error::NOTFOUND
+        end
+      end
+    end
+    
+    def delete(key)
+      binkey = MessagePack.pack(@prefix + [key])
+      old = get(key)
+      unless old.nil? # not nil..
+        old.clear if old.is_a?(LMDBBackedHash)
+        @lmdbdb.delete(binkey)
+        setsize(size-1)
+      end
+    end
+    
+    def put(key, value)
+      binkey = MessagePack.pack(@prefix + [key])
+      old = get(key)
+      if old.nil?
+        setsize(size+1) # For hashes
+      else # not nil..
+        old.clear if old.is_a?(LMDBBackedHash)
+      end
+      if value == []
+        @lmdbdb.put(binkey, MessagePack.pack([SUBARRAY_MAGIC, 0]))
+        value = LMDBBackedArray.new(@lmdbdb, @prefix + [key])
+      elsif value == {}
+        @lmdbdb.put(binkey, MessagePack.pack([SUBHASH_MAGIC, 0]))
+        value = LMDBBackedHash.new(@lmdbdb, @prefix + [key])
+      elsif value == nil
+        delete(key)
+      else
+        @lmdbdb.put(binkey, MessagePack.pack([PACKED_MAGIC, value]))
+      end
+      value
+    end
+    
+    def []=(key, value)
+      put(key, value)
+    end
+    
+    def clear
+      if (@prefix.length > 0) then
+        for i in 0..(size-1) do
+          delete(i)
+        end
+        setsize(0)
+      else
+        @lmdbdb.clear
+      end
+    end
+    
+    def each_pair
+      startkey = MessagePack.pack(@prefix + [0])
+      count = 0
+      @lmdbdb.cursor do |cursor|
+        k, v = nil, nil
+        begin
+          (k, v) = cursor.set(startkey)
+        rescue LMDB::Error::NOTFOUND
+          begin
+            (k, v) = cursor.set_range(startkey)
+          rescue LMDB::Error::NOTFOUND
+            return
+          end
+        end
+        stop = false
+        lastindex = 0
+        until stop do
+          if k.nil?
+            break
+          end
+          k = MessagePack.unpack(k)
+          index = k.pop
+          if k != @prefix
+#             puts "#{k}!=#{@prefix} #{index}" 
+            break
+          end
+          count += 1
+          value = getv(v, index)
+          yield(index, value) unless value.nil? # each_pair is backwards of each_with_index
+          lastindex = index
+          (k, v) = cursor.next
+        end
+        if count < (size-1) then
+          raise "cursor didn't get them all!" unless item.nil?
+        end
+      end
+    end
+    
+    def each
+      each_pair do |key, value|
+        yield(value)
+      end
+    end
+    
+    def each_key
+      each_with_index do |key, value|
+        yield(key)
+      end
+    end
+    
+    def expand()
+      previousMapsize = env.info[:mapsize]
+      newMapsize = previousMapsize * 1.4
+      realnewMapsize = (newMapsize/(1024*1024)).ceil * 1024 * 1024
+      puts "Previous map size: #{previousMapsize} new #{newMapsize} rounded #{realnewMapsize}"
+      env.mapsize=(realnewMapsize)
+    end
+  end
+
+  # -------------------------------------------------------------------------------------------------------
+  class LMDBBackedArray < LMDBBackedHash
+    include Enumerable
+    
+    def size
+      asize = 0
+      v = @lmdbdb.get(@mykey)
+      if v == nil then
+        asize = 0
+      else
+        (magic1, asize) = MessagePack.unpack(v)
+        raise "Bad magic!" if (magic1 != SUBARRAY_MAGIC)
+      end
+      raise "wat!" unless asize.is_a?(Integer)
+      return asize
+    end
+    
+    def setsize(newsize)
+      raise "wat!" unless newsize.is_a?(Integer)
+      if newsize > 0 then
         @lmdbdb.put(@mykey, MessagePack.pack([SUBARRAY_MAGIC, newsize]))
       else
         begin
@@ -83,7 +208,6 @@ module Ebooks
         rescue LMDB::Error::NOTFOUND
         end
       end
-#       @size = newsize
     end
     
     def delete(key)
@@ -92,7 +216,6 @@ module Ebooks
       if (key == size()-1) then
         setsize(key)
       end
-#       @cache[key] = nil
     end
     
     def put(key, value)
@@ -100,17 +223,18 @@ module Ebooks
       if key >= size
         setsize(key+1)
       end
+      old = get(key)
+      old.clear if old.is_a?(LMDBBackedHash)
       if value == []
         @lmdbdb.put(binkey, MessagePack.pack([SUBARRAY_MAGIC, 0]))
         value = LMDBBackedArray.new(@lmdbdb, @prefix + [key])
-#         @cache[key] = value
+      elsif value == {}
+        @lmdbdb.put(binkey, MessagePack.pack([SUBHASH_MAGIC, 0]))
+        value = LMDBBackedHash.new(@lmdbdb, @prefix + [key])
       elsif value == nil
         delete(key)
-#         @cache.delete(key)
       else
-#         puts "#{value}"
         @lmdbdb.put(binkey, MessagePack.pack([PACKED_MAGIC, value]))
-#         @lmdbdb.put(binkey, QARRAY_MAGIC.chr + value.pack('Q*'))
       end
       value
     end
@@ -190,18 +314,6 @@ module Ebooks
     
     def <<(o)
       append(o)
-    end
-    
-    def cachereset
-#       @cache = {}
-    end
-    
-    def expand()
-      previousMapsize = env.info[:mapsize]
-      newMapsize = previousMapsize * 1.4
-      realnewMapsize = (newMapsize/(1024*1024)).ceil * 1024 * 1024
-      puts "Previous map size: #{previousMapsize} new #{newMapsize} rounded #{realnewMapsize}"
-      env.mapsize=(realnewMapsize)
     end
     
     def import(a)

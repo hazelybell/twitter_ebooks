@@ -52,6 +52,8 @@ module Ebooks
             @sentences[i] = tikis
             last_tiki = INTERIM
             tikis.each_with_index do |tiki, j|
+              raise "wat!" unless last_tiki.is_a?(Integer)
+              raise "wat!" unless tiki.is_a?(Integer)
               @unigrams[last_tiki] ||= []
               @unigrams[last_tiki] << [i, j]
 
