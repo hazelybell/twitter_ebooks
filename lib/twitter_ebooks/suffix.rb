@@ -17,7 +17,6 @@ module Ebooks
     end
     
     def already(sentence)
-#       return false # TODO: fix this (reverse token map?)
       min = 10000000000000
       minbigrs = nil
       minpos = nil
@@ -118,7 +117,26 @@ module Ebooks
       return (a1[start...(start+a2.length-1)] == a2)
     end
 
-
+    def verbatim(sentence)
+      min = 10000000000000
+      minbigrs = nil
+      for bi in 2..(sentence.length)
+        bigrs = @bigrams[sentence[bi-2]]
+        return false if bigrs.nil?
+        bigrs = bigrs[sentence[bi-1]]
+        return false if bigrs.nil?
+        if bigrs.length < min
+          min = bigrs.length
+          minbigrs = bigrs
+        end
+      end
+      minbigrs.each do |ref|
+        if SuffixGenerator.subseq?(@sentences[ref[0]], sentence)
+          return true
+        end
+      end
+      return false
+    end
 
     # Generate a recombined sequence of tikis
     # @param passes [Integer] number of times to recombine

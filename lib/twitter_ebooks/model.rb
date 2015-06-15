@@ -109,7 +109,7 @@ module Ebooks
     # @param destination [Array<Array<Integer>>]
     # @return [Array<Array<Integer>>]
     def mass_tikify(text, destination)
-#       sentences = NLP.sentences(text)
+      sentences = text.lines
       i = 0
       sentences.each do |s|
         log ("Importing: sentence #{i}") if (i % 1000) == 0
@@ -286,17 +286,7 @@ module Ebooks
     # @param tikis [Array<Integer>]
     # @return [Boolean]
     def verbatim?(tikis)
-      sv = @sentences.find_index { |s| s.length > 1 && SuffixGenerator.subseq?(s, tikis) }
-      unless sv.nil?
-        puts ("Corpus #{sv}: #{NLP.reconstruct(@sentences[sv], @tokens)}")
-        return true
-      end
-      sv = @mentions.find_index { |s| s.length > 1 && SuffixGenerator.subseq?(s, tikis) }
-      unless sv.nil?
-        puts ("Mention #{sv}: #{NLP.reconstruct(@mentions[sv], @tokens)}")
-        return true
-      end
-      return false
+      return (@smodel.verbatim(tikis) || @mmodel.verbatim(tikis))
     end
 
     # Finds relevant and slightly relevant tokenized sentences to input
